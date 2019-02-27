@@ -55,7 +55,7 @@ auto RemoveThreadFlagByClientId(PETHREAD a_thread) -> NTSTATUS
 	}
 	return v_ret_status;
 }
-//方法一：枚举，不是很好，至少需要从r3穿入一个进程名称或者pid
+//方法一：枚举，不是很好，至少需要从R3传入一个进程名称或者pid
 #define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
 
 auto EnumProcessThread(HANDLE a_process_id,std::vector<CLIENT_ID> &a_thread_vec) -> bool
@@ -104,7 +104,7 @@ auto EnumProcessThread(HANDLE a_process_id,std::vector<CLIENT_ID> &a_thread_vec)
 	}
 	return true;
 }
-void BypassCheckSign(PDRIVER_OBJECT pDriverObj)
+void BypassCheckSign(PDRIVER_OBJECT a_driver_object)
 {
 	//STRUCT FOR WIN64
 	typedef struct _LDR_DATA                         			// 24 elements, 0xE0 bytes (sizeof)
@@ -120,9 +120,9 @@ void BypassCheckSign(PDRIVER_OBJECT pDriverObj)
 		struct _UNICODE_STRING BaseDllName;                      // 3 elements, 0x10 bytes (sizeof)
 		ULONG32      Flags;
 	}LDR_DATA, *PLDR_DATA;
-	PLDR_DATA ldr;
-	ldr = (PLDR_DATA)(pDriverObj->DriverSection);
-	ldr->Flags |= 0x20;
+	PLDR_DATA v_ldr;
+	v_ldr = static_cast<PLDR_DATA>(a_driver_object->DriverSection);
+	v_ldr->Flags |= 0x20;
 }
 //方法二：使用线程回调，无需从R3穿入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多
 OB_PREOP_CALLBACK_STATUS preCall2(PVOID RegistrationContext, POB_PRE_OPERATION_INFORMATION pOperationInformation)
