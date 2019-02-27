@@ -17,7 +17,7 @@ extern "C"
 extern "C" DRIVER_INITIALIZE DriverEntry;
 
 //摘掉标志
-auto RemoveThreadFlagByClientId(PETHREAD a_thread) -> NTSTATUS
+auto RemoveThreadFlagByEthread(PETHREAD a_thread) -> NTSTATUS
 {
 	auto v_ret_status{ STATUS_SUCCESS };
 	//PETHREAD v_thread;
@@ -47,7 +47,7 @@ auto RemoveThreadFlagByClientId(PETHREAD a_thread) -> NTSTATUS
 #define cross_thread_flags_offest 0x448
 	if (*reinterpret_cast<PULONG>(reinterpret_cast<ULONG64>(a_thread)) + cross_thread_flags_offest & ThreadHideFromDebugger)
 	{
-
+		KdPrint(("yes\n"));
 		*reinterpret_cast<PULONG>(reinterpret_cast<ULONG64>(a_thread) + cross_thread_flags_offest) &= ~ThreadHideFromDebugger;
 
 		//}
@@ -125,10 +125,11 @@ void BypassCheckSign(PDRIVER_OBJECT a_driver_object)
 	v_ldr->Flags |= 0x20;
 }
 //方法二：使用线程回调，无需从R3传入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多
-OB_PREOP_CALLBACK_STATUS preCall3(PVOID RegistrationContext, POB_PRE_OPERATION_INFORMATION pOperationInformation)
+OB_PREOP_CALLBACK_STATUS preCall(PVOID RegistrationContext, POB_PRE_OPERATION_INFORMATION pOperationInformation)
 {
 	auto v_thread_object_pointer = static_cast<PETHREAD>(pOperationInformation->Object);
-	RemoveThreadFlagByClientId(v_thread_object_pointer);
+	
+	RemoveThreadFlagByEthread(v_thread_object_pointer);
 	return OB_PREOP_SUCCESS;
 }
 
@@ -146,7 +147,7 @@ auto RegisterThreadObForRemoveFlag() -> NTSTATUS
 	memset(&op_reg, 0, sizeof(op_reg));
 	op_reg.ObjectType = PsThreadType;
 	op_reg.Operations = OB_OPERATION_HANDLE_CREATE | OB_OPERATION_HANDLE_DUPLICATE;
-	op_reg.PreOperation = static_cast<POB_PRE_OPERATION_CALLBACK>(preCall3);
+	op_reg.PreOperation = static_cast<POB_PRE_OPERATION_CALLBACK>(preCall);
 	v_ob_reg.OperationRegistration = &op_reg;
 	v_status = ObRegisterCallbacks(&v_ob_reg, &g_thread_handle);
 	return v_status;
@@ -188,6 +189,6 @@ auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 	KdPrint(("load\n"));
 	BypassCheckSign(a_driver_object);
 	RegisterThreadObForRemoveFlag();
-
+	
 	return v_ret_status;
 }
