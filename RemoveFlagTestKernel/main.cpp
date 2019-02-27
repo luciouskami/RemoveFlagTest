@@ -129,8 +129,6 @@ OB_PREOP_CALLBACK_STATUS preCall2(PVOID RegistrationContext, POB_PRE_OPERATION_I
 {
 	auto v_thread_object_pointer = static_cast<PETHREAD>(pOperationInformation->Object);
 	RemoveThreadFlagByClientId(v_thread_object_pointer);
-	pOperationInformation->Parameters->CreateHandleInformation.DesiredAccess = 0x1fffff;
-	pOperationInformation->Parameters->CreateHandleInformation.OriginalDesiredAccess = 0x1fffff;
 	return OB_PREOP_SUCCESS;
 }
 
