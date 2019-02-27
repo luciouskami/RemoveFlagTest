@@ -44,12 +44,14 @@ auto RemoveThreadFlagByEthread(PETHREAD a_thread) -> NTSTATUS
 	//	}
 		//&v_thread->CrossThreadFlags & ThreadHideFromDebugger;
 		//win7 sp1 x64
-#define cross_thread_flags_offest 0x448
-	if (*reinterpret_cast<PULONG>(reinterpret_cast<ULONG64>(a_thread)) + cross_thread_flags_offest & ThreadHideFromDebugger)
+		//#define cross_thread_flags_offest 0x448
+	auto v_temp_flags = wdk::PsGetThreadCrossFlags(a_thread);
+	if (v_temp_flags & ThreadHideFromDebugger)
 	{
 		KdPrint(("yes\n"));
-		*reinterpret_cast<PULONG>(reinterpret_cast<ULONG64>(a_thread) + cross_thread_flags_offest) &= ~ThreadHideFromDebugger;
-
+		v_temp_flags &= ~ThreadHideFromDebugger;
+		
+		wdk::PsSetThreadCrossFlags(a_thread, v_temp_flags);
 		//}
 		return v_ret_status;
 	}
@@ -127,9 +129,18 @@ void BypassCheckSign(PDRIVER_OBJECT a_driver_object)
 //方法二：使用线程回调，无需从R3传入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多
 OB_PREOP_CALLBACK_STATUS preCall(PVOID RegistrationContext, POB_PRE_OPERATION_INFORMATION pOperationInformation)
 {
+	if (pOperationInformation->ObjectType != *PsThreadType)
+	{
+		return OB_PREOP_SUCCESS;
+	}
 	auto v_thread_object_pointer = static_cast<PETHREAD>(pOperationInformation->Object);
+
+	if (pOperationInformation->Operation == OB_OPERATION_HANDLE_CREATE || pOperationInformation->Operation == OB_OPERATION_HANDLE_DUPLICATE)
+	{
+		
+		RemoveThreadFlagByEthread(v_thread_object_pointer);
+	}
 	
-	RemoveThreadFlagByEthread(v_thread_object_pointer);
 	return OB_PREOP_SUCCESS;
 }
 
