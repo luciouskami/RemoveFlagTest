@@ -132,7 +132,7 @@ OB_PREOP_CALLBACK_STATUS preCall2(PVOID RegistrationContext, POB_PRE_OPERATION_I
 	return OB_PREOP_SUCCESS;
 }
 
-PVOID g_thread_handle = nullptr;
+PVOID g_thread_handle;
 auto RegisterThreadObForRemoveFlag() -> NTSTATUS
 {
 	auto v_status{ STATUS_SUCCESS };
@@ -155,7 +155,12 @@ auto RegisterThreadObForRemoveFlag() -> NTSTATUS
 void DriverUnload(PDRIVER_OBJECT /*a_driver_object*/)
 {
 
-
+	if (nullptr != g_thread_handle)
+	{
+		
+		ObUnRegisterCallbacks(g_thread_handle);
+		g_thread_handle = nullptr;
+	}
 	KdPrint(("Unload\n"));
 }
 
