@@ -124,7 +124,7 @@ void BypassCheckSign(PDRIVER_OBJECT a_driver_object)
 	v_ldr = static_cast<PLDR_DATA>(a_driver_object->DriverSection);
 	v_ldr->Flags |= 0x20;
 }
-//方法二：使用线程回调，无需从R传入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多
+//方法二：使用线程回调，无需从R3传入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多
 OB_PREOP_CALLBACK_STATUS preCall2(PVOID RegistrationContext, POB_PRE_OPERATION_INFORMATION pOperationInformation)
 {
 	auto v_thread_object_pointer = static_cast<PETHREAD>(pOperationInformation->Object);
