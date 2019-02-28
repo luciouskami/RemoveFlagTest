@@ -15,51 +15,50 @@ extern "C"
 #include <Wdk.h>
 
 extern "C" DRIVER_INITIALIZE DriverEntry;
+#define	DEVICE_NAME			L"\\Device\\remove_flag_test"
+
+#define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
+#define PS_CROSS_THREAD_FLAGS_HIDEFROMDBG          0x00000004UL
+#define EXE_NAME "remove_flag_test.exe"
+#define EXE_NAME_U L"remove_flag_test.exe"
+
+//work_item dpc
+#define TIMER_OUT -10000 * 1000 * 5 //5秒遍历一次（复数是间隔，正数是到期）
+LARGE_INTEGER g_due_time;
+KDPC g_dpc;
+KTIMER g_timer;
+PIO_WORKITEM g_io_workitem_pointer;
+WORK_QUEUE_ITEM g_remove_item;
+
+//一些需要复用的变量
+//driver
+PDRIVER_OBJECT g_driver_object{ nullptr };
+PDEVICE_OBJECT g_device_object{ nullptr };
+
+bool g_is_notify_created = false;
+PEPROCESS g_exe_eprocess_pointer;
+HANDLE g_exe_pid;
+std::vector<HANDLE> g_exe_thread_vec;
 
 //摘掉标志
 auto RemoveThreadFlagByEthread(PETHREAD a_thread) -> NTSTATUS
 {
 	auto v_ret_status{ STATUS_SUCCESS };
-	//PETHREAD v_thread;
-	//CLIENT_ID v_cid;
-
 	PAGED_CODE();
-	//__try
-	//{
-	//	ProbeForRead(a_cid, sizeof(CLIENT_ID), sizeof(ULONG));
-	//	v_cid = *a_cid;
-	//}
-	//__except (EXCEPTION_EXECUTE_HANDLER)
-	//{
-	//	return GetExceptionCode();
-	//}
-	//
-	//if (nullptr != v_cid.UniqueThread)
-	//{
-	//	//获得ETHREAD
-	//	v_ret_status = PsLookupThreadByThreadId(v_cid.UniqueThread,&v_thread);
-	//	if (!NT_SUCCESS(v_ret_status))
-	//	{
-	//		return v_ret_status;
-	//	}
-		//&v_thread->CrossThreadFlags & ThreadHideFromDebugger;
-		//win7 sp1 x64
-		//#define cross_thread_flags_offest 0x448
 	auto v_temp_flags = wdk::PsGetThreadCrossFlags(a_thread);
-	if (v_temp_flags & ThreadHideFromDebugger)
-	{
-		KdPrint(("yes\n"));
-		v_temp_flags &= ~ThreadHideFromDebugger;
+
+		if (v_temp_flags & PS_CROSS_THREAD_FLAGS_HIDEFROMDBG)
+		{
+			KdPrint(("yes\n"));
+			v_temp_flags &= ~PS_CROSS_THREAD_FLAGS_HIDEFROMDBG;
 		
-		wdk::PsSetThreadCrossFlags(a_thread, v_temp_flags);
+			wdk::PsSetThreadCrossFlags(a_thread, v_temp_flags);
 		//}
-		return v_ret_status;
-	}
+			return v_ret_status;
+		}
 	return v_ret_status;
 }
 //方法一：枚举，不是很好，至少需要从R3传入一个进程名称或者pid
-#define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
-
 auto EnumProcessThread(HANDLE a_process_id,std::vector<CLIENT_ID> &a_thread_vec) -> bool
 {
 	
@@ -114,8 +113,8 @@ void BypassCheckSign(PDRIVER_OBJECT a_driver_object)
 		struct _LIST_ENTRY InLoadOrderLinks;                     // 2 elements, 0x10 bytes (sizeof)
 		struct _LIST_ENTRY InMemoryOrderLinks;                   // 2 elements, 0x10 bytes (sizeof)
 		struct _LIST_ENTRY InInitializationOrderLinks;           // 2 elements, 0x10 bytes (sizeof)
-		VOID*        DllBase;
-		VOID*        EntryPoint;
+		void*        DllBase;
+		void*        EntryPoint;
 		ULONG32      SizeOfImage;
 		UINT8        _PADDING0_[0x4];
 		struct _UNICODE_STRING FullDllName;                      // 3 elements, 0x10 bytes (sizeof)
@@ -126,21 +125,25 @@ void BypassCheckSign(PDRIVER_OBJECT a_driver_object)
 	v_ldr = static_cast<PLDR_DATA>(a_driver_object->DriverSection);
 	v_ldr->Flags |= 0x20;
 }
-//方法二：使用线程回调，无需从R3传入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多
+
+//方法二：使用线程回调，无需从R3传入任何数据，也直接支持复数进程，效果应该和直接SSDThook差不多.
 OB_PREOP_CALLBACK_STATUS preCall(PVOID RegistrationContext, POB_PRE_OPERATION_INFORMATION pOperationInformation)
 {
 	if (pOperationInformation->ObjectType != *PsThreadType)
 	{
 		return OB_PREOP_SUCCESS;
 	}
+	//DzACTest
 	auto v_thread_object_pointer = static_cast<PETHREAD>(pOperationInformation->Object);
-
-	if (pOperationInformation->Operation == OB_OPERATION_HANDLE_CREATE || pOperationInformation->Operation == OB_OPERATION_HANDLE_DUPLICATE)
-	{
-		
-		RemoveThreadFlagByEthread(v_thread_object_pointer);
-	}
 	
+	auto v_process_object_pointer = PsGetThreadProcess(v_thread_object_pointer);
+	if (strcmp(reinterpret_cast<char*>(wdk::PsGetProcessImageFileName(v_process_object_pointer)), EXE_NAME) == 0)
+	{
+		if (pOperationInformation->Operation == OB_OPERATION_HANDLE_CREATE || pOperationInformation->Operation == OB_OPERATION_HANDLE_DUPLICATE)
+		{
+			RemoveThreadFlagByEthread(v_thread_object_pointer);
+		}
+	}
 	return OB_PREOP_SUCCESS;
 }
 
@@ -164,18 +167,142 @@ auto RegisterThreadObForRemoveFlag() -> NTSTATUS
 	return v_status;
 }
 
+//使用进程和线程创建通知
+void MyCreateProcessNotifyEx
+(
+	__inout   PEPROCESS a_process,
+	__in      HANDLE a_process_id,
+	__in_opt  PPS_CREATE_NOTIFY_INFO a_create_info
+)
+{
+	auto v_status{ STATUS_SUCCESS };
+	PEPROCESS v_eprocess_pointer;
+	UNICODE_STRING v_temp_filename;
+	//EXE_NAME_U
+	BOOLEAN v_lock = FALSE;
+	RtlInitUnicodeString(&v_temp_filename, EXE_NAME_U);
+	if (nullptr != a_create_info)	
+	{
+	
+		v_status = PsLookupProcessByProcessId(a_process_id, &v_eprocess_pointer);
+		if (!NT_SUCCESS(v_status))
+		{
+			return;
+		};
+
+		v_lock = RtlEqualUnicodeString(a_create_info->ImageFileName, &v_temp_filename, TRUE);
+		if (v_lock)
+		{
+			KdPrint(("Process Create!"));
+			g_exe_eprocess_pointer = v_eprocess_pointer;
+			g_exe_pid = a_process_id;
+		}	
+	}
+	else
+	{
+/*		v_lock = RtlEqualUnicodeString(a_create_info->ImageFileName, &v_temp_filename, TRUE);
+		if (v_lock)
+		{
+			g_exe_eprocess_pointer = nullptr;
+			g_exe_pid = nullptr;
+			g_exe_thread_vec.clear()*/;
+			KdPrint(("Process Exit!"));
+		//}
+	}
+	RtlSecureZeroMemory(&v_temp_filename, sizeof UNICODE_STRING);
+}
+
+void MyCreateThreadNotify
+(
+	IN HANDLE  a_process_id,
+	IN HANDLE  a_thread_id,
+	IN BOOLEAN  a_create
+)
+{
+	auto v_status{ STATUS_SUCCESS };
+	PEPROCESS v_eprocess_pointer;
+	bool v_lock;
+	if (a_create)
+	{
+		v_lock = a_process_id == g_exe_pid;
+		if (v_lock)
+		{
+			KdPrint(("Thread Create!"));
+			//除非使用底层API，否则在创建线程的时候不会拥有该标志
+			g_exe_thread_vec.emplace_back(a_thread_id);
+		}
+	}
+	else
+	{
+		v_lock = a_process_id == g_exe_pid;
+		if (v_lock)
+		{
+			const auto it = std::find(g_exe_thread_vec.begin(), g_exe_thread_vec.end(), a_thread_id);
+			g_exe_thread_vec.erase(it);
+			KdPrint(("Thread Exit!"));
+		}
+		
+	}	
+}
+auto CreateMonitorNotify() -> NTSTATUS
+{
+	auto v_ret_status{ STATUS_SUCCESS };
+	v_ret_status = PsSetCreateProcessNotifyRoutineEx(static_cast<PCREATE_PROCESS_NOTIFY_ROUTINE_EX>(MyCreateProcessNotifyEx), FALSE);
+	v_ret_status = PsSetCreateThreadNotifyRoutine(MyCreateThreadNotify);
+	if (NT_SUCCESS(v_ret_status))
+	{
+		g_is_notify_created =true;
+	}
+	return v_ret_status;
+}	
 void DriverUnload(PDRIVER_OBJECT /*a_driver_object*/)
 {
-
+	KeCancelTimer(&g_timer);
+	IoFreeWorkItem(g_io_workitem_pointer);
+	IoDeleteDevice(g_driver_object->DeviceObject);
 	if (nullptr != g_thread_handle)
 	{
 		
 		ObUnRegisterCallbacks(g_thread_handle);
 		g_thread_handle = nullptr;
 	}
+	if (g_is_notify_created)
+	{
+		PsSetCreateProcessNotifyRoutineEx(static_cast<PCREATE_PROCESS_NOTIFY_ROUTINE_EX>(MyCreateProcessNotifyEx), TRUE);
+		PsRemoveCreateThreadNotifyRoutine(&MyCreateThreadNotify);
+	}
 	KdPrint(("Unload\n"));
 }
-
+void RemoveFlagWorkItem(IN PDEVICE_OBJECT  device_object, IN PVOID  context)
+{
+	KdPrint(("On RemoveFlagWorkItem!\n"));
+	for (auto& v:g_exe_thread_vec)
+	{
+		PETHREAD v_temp_ethread_pointer;
+		PsLookupThreadByThreadId(v, &v_temp_ethread_pointer);
+		RemoveThreadFlagByEthread(v_temp_ethread_pointer);
+	}
+}
+void CustomDpc(IN struct _KDPC *a_dpc, IN PVOID   /*a_context*/, IN PVOID /*a_arg1*/, IN PVOID /*a_arg2*/)
+                         
+{
+	//初始化work_item
+	IoAllocateWorkItem(g_device_object);
+	//IoInitializeWorkItem(g_device_object, g_io_workitem_pointer);
+	if (g_io_workitem_pointer)
+	{
+		IoQueueWorkItem(g_io_workitem_pointer, static_cast<PIO_WORKITEM_ROUTINE>(RemoveFlagWorkItem), DelayedWorkQueue, nullptr);
+	}
+	KeSetTimer(&g_timer, g_due_time, a_dpc);
+}
+void WORK_THREAD(PVOID /*context*/)
+{
+	//初始化dpc
+	g_due_time = RtlConvertLongToLargeInteger(TIMER_OUT);
+	KeInitializeDpc(&g_dpc, static_cast<PKDEFERRED_ROUTINE>(CustomDpc), nullptr);
+	KeSetTimer(&g_timer, g_due_time, &g_dpc);
+	KeWaitForSingleObject(&g_timer, Executive, KernelMode, FALSE, nullptr);
+}
 auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 	PUNICODE_STRING a_reg_path) -> NTSTATUS
 {
@@ -185,6 +312,12 @@ auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 	//KdBreakPoint();
 
 	auto v_ret_status = STATUS_SUCCESS;
+	UNICODE_STRING v_ustr_device_name;
+	PDEVICE_OBJECT v_device_object;
+	v_ret_status = IoCreateDevice(a_driver_object, 0, &v_ustr_device_name, FILE_DEVICE_UNKNOWN, 0, FALSE, &v_device_object);
+	g_driver_object = a_driver_object;
+	g_device_object = v_device_object;
+	RtlInitUnicodeString(&v_ustr_device_name, DEVICE_NAME);
 	for (;;)
 	{
 		//Thanks Meesong for WDKExt
@@ -193,13 +326,24 @@ auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 		{
 			break;
 		}
-
+		
 		a_driver_object->DriverUnload = DriverUnload;
 		break;
 	}
 	KdPrint(("load\n"));
+	g_exe_thread_vec.clear();
+	KeInitializeTimer(&g_timer);
 	BypassCheckSign(a_driver_object);
-	RegisterThreadObForRemoveFlag();
-	
+	//RegisterThreadObForRemoveFlag();
+	CreateMonitorNotify();
+	HANDLE v_thread_handle;
+	//拉一个线程起dpc
+	v_ret_status = PsCreateSystemThread(&v_thread_handle, THREAD_ALL_ACCESS, nullptr, nullptr, nullptr,
+		static_cast<PKSTART_ROUTINE>(WORK_THREAD), static_cast<PVOID>(a_driver_object));
+	if (!NT_SUCCESS(v_ret_status))
+	{
+		return v_ret_status;
+	}
+	ZwClose(v_thread_handle);
 	return v_ret_status;
 }
