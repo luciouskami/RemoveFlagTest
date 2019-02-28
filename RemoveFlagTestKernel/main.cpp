@@ -134,6 +134,7 @@ OB_PREOP_CALLBACK_STATUS preCall(PVOID RegistrationContext, POB_PRE_OPERATION_IN
 		return OB_PREOP_SUCCESS;
 	}
 	//DzACTest
+	
 	auto v_thread_object_pointer = static_cast<PETHREAD>(pOperationInformation->Object);
 	
 	auto v_process_object_pointer = PsGetThreadProcess(v_thread_object_pointer);
@@ -176,31 +177,26 @@ void MyCreateProcessNotifyEx
 )
 {
 	auto v_status{ STATUS_SUCCESS };
-	PEPROCESS v_eprocess_pointer;
 	UNICODE_STRING v_temp_filename;
 	//EXE_NAME_U
 	BOOLEAN v_lock = FALSE;
 
-	RtlInitUnicodeString(&v_temp_filename, EXE_NAME_U);
-	v_status = PsLookupProcessByProcessId(a_process_id, &v_eprocess_pointer);
-	if (!NT_SUCCESS(v_status))
-	{
-		return;
-	};
+	
+
 	if (nullptr != a_create_info)	
 	{
-		v_lock = RtlEqualUnicodeString(a_create_info->ImageFileName, &v_temp_filename, TRUE);
+		v_lock = (std::wstring_view(a_create_info->ImageFileName->Buffer).find(EXE_NAME_U) != std::wstring_view::npos);
 		if (v_lock)
 		{
 			KdPrint(("Process Create!\n"));
-			g_exe_eprocess_pointer = v_eprocess_pointer;
+			g_exe_eprocess_pointer = a_process;
 			g_exe_pid = a_process_id;
 		}	
 	}
 	else
 	{
 		//妈呀，这里都没PPS_CREATE_NOTIFY_INFO，还用个锤子啊
-		v_lock = _stricmp((char*)wdk::PsGetProcessImageFileName(v_eprocess_pointer), EXE_NAME) == 0;
+		v_lock = std::string_view(reinterpret_cast<const char*>(wdk::PsGetProcessImageFileName(a_process))).find(EXE_NAME) != std::string_view::npos;
 		if (v_lock)
 		{
 			g_exe_eprocess_pointer = nullptr;
@@ -293,7 +289,7 @@ void CustomDpc(IN struct _KDPC *a_dpc, IN PVOID   /*a_context*/, IN PVOID /*a_ar
 	//KIRQL v_old_irql;
 	//初始化work_item
 	g_io_workitem_pointer = IoAllocateWorkItem(g_device_object);
-	//eAcquireSpinLock(g_kspin_lock, &v_old_irql);
+	//KeAcquireSpinLock(g_kspin_lock, &v_old_irql);
 	if (nullptr != g_io_workitem_pointer)
 	{
 		IoInitializeWorkItem(g_device_object, g_io_workitem_pointer);
@@ -344,7 +340,7 @@ auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 	g_exe_thread_vec.clear();
 	KeInitializeTimer(&g_timer);
 	BypassCheckSign(a_driver_object);
-	//RegisterThreadObForRemoveFlag();
+	RegisterThreadObForRemoveFlag();
 	CreateMonitorNotify();
 	HANDLE v_thread_handle;
 	//拉一个线程起dpc
