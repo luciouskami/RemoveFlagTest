@@ -18,7 +18,6 @@ extern "C" DRIVER_INITIALIZE DriverEntry;
 #define	DEVICE_NAME			L"\\Device\\remove_flag_test"
 
 #define STATUS_INFO_LENGTH_MISMATCH      ((NTSTATUS)0xC0000004L)
-#define PS_CROSS_THREAD_FLAGS_HIDEFROMDBG          0x00000004UL
 #define EXE_NAME "remove_flag_test.exe"
 #define EXE_NAME_U L"remove_flag_test.exe"
 
@@ -28,6 +27,7 @@ LARGE_INTEGER g_due_time;
 KDPC g_dpc;
 KTIMER g_timer;
 PIO_WORKITEM g_io_workitem_pointer;
+PKSPIN_LOCK g_kspin_lock;
 WORK_QUEUE_ITEM g_remove_item;
 
 //一些需要复用的变量
@@ -47,10 +47,10 @@ auto RemoveThreadFlagByEthread(PETHREAD a_thread) -> NTSTATUS
 	PAGED_CODE();
 	auto v_temp_flags = wdk::PsGetThreadCrossFlags(a_thread);
 
-		if (v_temp_flags & PS_CROSS_THREAD_FLAGS_HIDEFROMDBG)
+		if (v_temp_flags & wdk::PsCrossThreadFlagsHideFromDebugger)
 		{
 			KdPrint(("yes\n"));
-			v_temp_flags &= ~PS_CROSS_THREAD_FLAGS_HIDEFROMDBG;
+			v_temp_flags &= ~wdk::PsCrossThreadFlagsHideFromDebugger;
 		
 			wdk::PsSetThreadCrossFlags(a_thread, v_temp_flags);
 		//}
@@ -193,7 +193,7 @@ void MyCreateProcessNotifyEx
 		v_lock = RtlEqualUnicodeString(a_create_info->ImageFileName, &v_temp_filename, TRUE);
 		if (v_lock)
 		{
-			KdPrint(("Process Create!"));
+			KdPrint(("Process Create!\n"));
 			g_exe_eprocess_pointer = v_eprocess_pointer;
 			g_exe_pid = a_process_id;
 		}	
@@ -206,7 +206,7 @@ void MyCreateProcessNotifyEx
 			g_exe_eprocess_pointer = nullptr;
 			g_exe_pid = nullptr;
 			g_exe_thread_vec.clear()*/;
-			KdPrint(("Process Exit!"));
+			KdPrint(("Process Exit!\n"));
 		//}
 	}
 	RtlSecureZeroMemory(&v_temp_filename, sizeof UNICODE_STRING);
@@ -258,7 +258,10 @@ auto CreateMonitorNotify() -> NTSTATUS
 void DriverUnload(PDRIVER_OBJECT /*a_driver_object*/)
 {
 	KeCancelTimer(&g_timer);
-	IoFreeWorkItem(g_io_workitem_pointer);
+	if (nullptr != g_io_workitem_pointer)
+	{
+		IoFreeWorkItem(g_io_workitem_pointer);
+	}
 	IoDeleteDevice(g_driver_object->DeviceObject);
 	if (nullptr != g_thread_handle)
 	{
@@ -286,18 +289,23 @@ void RemoveFlagWorkItem(IN PDEVICE_OBJECT  device_object, IN PVOID  context)
 void CustomDpc(IN struct _KDPC *a_dpc, IN PVOID   /*a_context*/, IN PVOID /*a_arg1*/, IN PVOID /*a_arg2*/)
                          
 {
+	KdPrint(("On CustomDpc!\n"));
+	//KIRQL v_old_irql;
 	//初始化work_item
-	IoAllocateWorkItem(g_device_object);
-	//IoInitializeWorkItem(g_device_object, g_io_workitem_pointer);
-	if (g_io_workitem_pointer)
+	g_io_workitem_pointer = IoAllocateWorkItem(g_device_object);
+	//eAcquireSpinLock(g_kspin_lock, &v_old_irql);
+	if (nullptr != g_io_workitem_pointer)
 	{
-		IoQueueWorkItem(g_io_workitem_pointer, static_cast<PIO_WORKITEM_ROUTINE>(RemoveFlagWorkItem), DelayedWorkQueue, nullptr);
+		IoInitializeWorkItem(g_device_object, g_io_workitem_pointer);
+		IoQueueWorkItem(g_io_workitem_pointer, static_cast<PIO_WORKITEM_ROUTINE>(RemoveFlagWorkItem), DelayedWorkQueue, nullptr);		
 	}
 	KeSetTimer(&g_timer, g_due_time, a_dpc);
+	//KeReleaseSpinLock(g_kspin_lock, v_old_irql);
 }
 void WORK_THREAD(PVOID /*context*/)
 {
 	//初始化dpc
+	KdPrint(("On WORK_THREAD!\n"));
 	g_due_time = RtlConvertLongToLargeInteger(TIMER_OUT);
 	KeInitializeDpc(&g_dpc, static_cast<PKDEFERRED_ROUTINE>(CustomDpc), nullptr);
 	KeSetTimer(&g_timer, g_due_time, &g_dpc);
@@ -314,10 +322,12 @@ auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 	auto v_ret_status = STATUS_SUCCESS;
 	UNICODE_STRING v_ustr_device_name;
 	PDEVICE_OBJECT v_device_object;
+
+	RtlInitUnicodeString(&v_ustr_device_name, DEVICE_NAME);
 	v_ret_status = IoCreateDevice(a_driver_object, 0, &v_ustr_device_name, FILE_DEVICE_UNKNOWN, 0, FALSE, &v_device_object);
 	g_driver_object = a_driver_object;
 	g_device_object = v_device_object;
-	RtlInitUnicodeString(&v_ustr_device_name, DEVICE_NAME);
+	
 	for (;;)
 	{
 		//Thanks Meesong for WDKExt
