@@ -180,16 +180,15 @@ void MyCreateProcessNotifyEx
 	UNICODE_STRING v_temp_filename;
 	//EXE_NAME_U
 	BOOLEAN v_lock = FALSE;
+
 	RtlInitUnicodeString(&v_temp_filename, EXE_NAME_U);
+	v_status = PsLookupProcessByProcessId(a_process_id, &v_eprocess_pointer);
+	if (!NT_SUCCESS(v_status))
+	{
+		return;
+	};
 	if (nullptr != a_create_info)	
 	{
-	
-		v_status = PsLookupProcessByProcessId(a_process_id, &v_eprocess_pointer);
-		if (!NT_SUCCESS(v_status))
-		{
-			return;
-		};
-
 		v_lock = RtlEqualUnicodeString(a_create_info->ImageFileName, &v_temp_filename, TRUE);
 		if (v_lock)
 		{
@@ -200,14 +199,15 @@ void MyCreateProcessNotifyEx
 	}
 	else
 	{
-/*		v_lock = RtlEqualUnicodeString(a_create_info->ImageFileName, &v_temp_filename, TRUE);
+		//妈呀，这里都没PPS_CREATE_NOTIFY_INFO，还用个锤子啊
+		v_lock = _stricmp((char*)wdk::PsGetProcessImageFileName(v_eprocess_pointer), EXE_NAME) == 0;
 		if (v_lock)
 		{
 			g_exe_eprocess_pointer = nullptr;
 			g_exe_pid = nullptr;
-			g_exe_thread_vec.clear()*/;
+			g_exe_thread_vec.clear();
 			KdPrint(("Process Exit!\n"));
-		//}
+		}
 	}
 	RtlSecureZeroMemory(&v_temp_filename, sizeof UNICODE_STRING);
 }
@@ -278,7 +278,7 @@ void DriverUnload(PDRIVER_OBJECT /*a_driver_object*/)
 }
 void RemoveFlagWorkItem(IN PDEVICE_OBJECT  device_object, IN PVOID  context)
 {
-	KdPrint(("On RemoveFlagWorkItem!\n"));
+	//KdPrint(("On RemoveFlagWorkItem!\n"));
 	for (auto& v:g_exe_thread_vec)
 	{
 		PETHREAD v_temp_ethread_pointer;
@@ -289,7 +289,7 @@ void RemoveFlagWorkItem(IN PDEVICE_OBJECT  device_object, IN PVOID  context)
 void CustomDpc(IN struct _KDPC *a_dpc, IN PVOID   /*a_context*/, IN PVOID /*a_arg1*/, IN PVOID /*a_arg2*/)
                          
 {
-	KdPrint(("On CustomDpc!\n"));
+	//KdPrint(("On CustomDpc!\n"));
 	//KIRQL v_old_irql;
 	//初始化work_item
 	g_io_workitem_pointer = IoAllocateWorkItem(g_device_object);
@@ -305,7 +305,7 @@ void CustomDpc(IN struct _KDPC *a_dpc, IN PVOID   /*a_context*/, IN PVOID /*a_ar
 void WORK_THREAD(PVOID /*context*/)
 {
 	//初始化dpc
-	KdPrint(("On WORK_THREAD!\n"));
+	//KdPrint(("On WORK_THREAD!\n"));
 	g_due_time = RtlConvertLongToLargeInteger(TIMER_OUT);
 	KeInitializeDpc(&g_dpc, static_cast<PKDEFERRED_ROUTINE>(CustomDpc), nullptr);
 	KeSetTimer(&g_timer, g_due_time, &g_dpc);
