@@ -70,7 +70,7 @@ auto EnumProcessThread(HANDLE a_process_id,std::vector<CLIENT_ID> &a_thread_vec)
 	do
 	{
 		v_buffer.reset(new uint8_t[(v_size + 7) / 8 * 8]);
-		a_ret_status = wdk::ZwQuerySystemInformation(wdk::SystemProcessInformation, v_buffer.get(), v_size, reinterpret_cast<PULONG>(&v_returned_size));
+		a_ret_status = wdk::ZwQuerySystemInformation(wdk::SYSTEM_INFORMATION_CLASS::SystemProcessInformation, v_buffer.get(), v_size, reinterpret_cast<PULONG>(&v_returned_size));
 		if (a_ret_status == STATUS_INFO_LENGTH_MISMATCH)
 		{
 			v_size = v_returned_size;
