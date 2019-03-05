@@ -47,13 +47,12 @@ auto RemoveThreadFlagByEthread(PETHREAD a_thread) -> NTSTATUS
 	PAGED_CODE();
 	auto v_temp_flags = wdk::PsGetThreadCrossFlags(a_thread);
 
-		if (v_temp_flags & wdk::PsCrossThreadFlagsHideFromDebugger)
+		if (v_temp_flags & wdk::PsThreadCrossFlagMask::PsCrossThreadFlagsHideFromDebugger)
 		{
 			KdPrint(("yes\n"));
-			v_temp_flags &= ~wdk::PsCrossThreadFlagsHideFromDebugger;
+			v_temp_flags &= ~wdk::PsThreadCrossFlagMask::PsCrossThreadFlagsHideFromDebugger;
 		
 			wdk::PsSetThreadCrossFlags(a_thread, v_temp_flags);
-		//}
 			return v_ret_status;
 		}
 	return v_ret_status;
@@ -352,4 +351,5 @@ auto DriverEntry(PDRIVER_OBJECT a_driver_object,\
 	}
 	ZwClose(v_thread_handle);
 	return v_ret_status;
+	
 }
